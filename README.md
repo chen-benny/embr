@@ -21,11 +21,11 @@ embr pipelines disk and network operations in parallel and eliminates intermedia
 
 ## Usage
 ```bash
-# v0.1 — direct transfer (current)
-embr push large_dataset.tar.gz
-embr pull <ip> [--port PORT] [--out PATH]
+# v0.2 — chunked transfer (current)
+embr push <file> [--port PORT]
+embr pull <ip>   [--port PORT] [--out PATH]
 
-# v0.3+ — tracker mode
+# v0.4+ — tracker mode
 embr push large_dataset.tar.gz   # → token: Kf3xQ9mZ
 embr pull Kf3xQ9mZ               # resolves via tracker
 embr pull Kf3xQ9mZ 192.168.1.50  # direct mode, skip tracker
@@ -33,22 +33,28 @@ embr pull Kf3xQ9mZ 192.168.1.50  # direct mode, skip tracker
 
 ## How It Works
 
-**Direct mode (v0.1 — current)**
+**Direct mode (v0.2 — current)**
 ```
 Sender                                                     Receiver
   │  embr push file.tar.gz                                     │
   │  → listening on :9000                                      │
-  │                                    embr pull 192.168.1.50  │
-  │<════════════ TCP connect + whole-file transfer ════════════>│
+  │  ←──────────── HANDSHAKE ───────────────────────────────── │
+  │  ──────────── FILE_META ───────────────────────────────→   │
+  │  ←──────────── CHUNK_REQ{0} ────────────────────────────── │
+  │  ──────── CHUNK_HDR{0,hash} + raw bytes ───────────────→   │
+  │  ←──────────── CHUNK_REQ{1} ────────────────────────────── │
+  │  ──────── CHUNK_HDR{1,hash} + raw bytes ───────────────→   │
+  │  ...                                                        │
+  │  ←──────────── COMPLETE ────────────────────────────────── │
 ```
 
-**Tracker mode (v0.3+)**
+**Tracker mode (v0.4+)**
 ```
 Sender                        Tracker                      Receiver
   │──── POST /register ───────>│                              │
   │<─── token: Kf3xQ9mZ ──────│                              │
   │                            │<──── GET /resolve/Kf3xQ9mZ ─│
-  │                            │───── {addr, hash, size} ────>│
+  │                            │───── {addr, size} ──────────>│
   │<══════════ UDP + parallel chunk transfer ════════════════>│
 ```
 
@@ -63,7 +69,7 @@ ctest --test-dir build
 
 - C++20 compiler (GCC 12+ / Clang 15+)
 - CMake 3.25+
-- OpenSSL (v0.2+, SHA256)
+- OpenSSL (SHA256 via EVP interface)
 - GoogleTest (fetched via CMake FetchContent)
 
 ## Architecture
@@ -73,8 +79,8 @@ embr/
 │   ├── main.cpp                   # CLI routing, transport lifecycle
 │   ├── core/
 │   │   ├── protocol.hpp/.cpp      # send_msg/recv_msg, wire format
-│   │   ├── chunk_manager.hpp      # chunk state bitmap (v0.2+)
-│   │   ├── hash.hpp/.cpp          # SHA256 (v0.2+)
+│   │   ├── chunk_manager.hpp      # chunk state bitmap
+│   │   ├── hash.hpp/.cpp          # SHA256 via OpenSSL EVP
 │   │   ├── push.hpp/.cpp          # sharer logic
 │   │   └── pull.hpp/.cpp          # fetcher logic
 │   ├── transport/
@@ -85,7 +91,7 @@ embr/
 │   └── util/
 │       ├── socket_fd.hpp          # RAII fd wrapper
 │       └── constants.hpp          # CHUNK_SIZE, READ_BUF_SIZE
-├── tracker/                       # standalone tracker server (v0.3+)
+├── tracker/                       # standalone tracker server (v0.4+)
 ├── tests/
 │   └── test_protocol.cpp
 └── CMakeLists.txt
@@ -99,11 +105,11 @@ Transport lifecycle owned by `main.cpp`. Swapping transport = one file change.
 Header (6 bytes, always): [version:u8][type:u8][payload_len:u32 BE]
 
 Message types:
-  HANDSHAKE  (0x01)  [token:utf8] (v0.2+)
+  HANDSHAKE  (0x01)  [token_len:u32 BE][token:utf8]
   FILE_META  (0x02)  [file_size:u64 BE][filename_len:u32 BE][filename:utf8]
-                     + [chunk_size:u32 BE][chunk_count:u32 BE][file_hash:32 bytes] (v0.2+)
-  CHUNK_REQ  (0x03)  [chunk_index:u32 BE] (v0.2+)
-  CHUNK_DATA (0x04)  [chunk_index:u32 BE][chunk_hash:32 bytes] + raw bytes (v0.2+)
+                     [chunk_size:u32 BE][chunk_count:u32 BE]
+  CHUNK_REQ  (0x03)  [chunk_index:u32 BE]
+  CHUNK_HDR  (0x04)  [chunk_index:u32 BE][chunk_hash:32 bytes] + raw bytes via data plane
   COMPLETE   (0x06)  (no payload)
   ERROR      (0x07)  [reason:utf8]
   CANCEL     (0x08)  (no payload)
@@ -113,8 +119,8 @@ Message types:
 
 | Phase | What |
 |-------|------|
-| **v0.1** | **TCP whole-file transfer, pluggable transport, wire protocol ✓** |
-| v0.2 | 16MB chunking + SHA256 per chunk, tracker, token discovery, HANDSHAKE |
+| v0.1 | TCP whole-file transfer, pluggable transport, wire protocol ✓ |
+| **v0.2** | **16MB chunking + SHA256 per-chunk integrity ✓** |
 | v0.3 | TCP + mmap + sendfile(), zero-copy on TCP path |
 | v0.4-v0.5 | Vanilla UDP + io_uring, self-managed reliability, 1-to-1 trusted network |
 | v0.6-v0.7 | Parallel chunks in flight, sliding window, atomic ChunkManager, Prometheus metrics |
@@ -123,7 +129,7 @@ Message types:
 
 ## Current Status
 
-**v0.1 — TCP whole-file transfer**
+**v0.2 — 16MB chunking + SHA256 per-chunk integrity**
 
 - [x] Project skeleton, CMake, GoogleTest
 - [x] Pluggable `Transport` interface
@@ -132,11 +138,17 @@ Message types:
 - [x] `util/constants.hpp` — `CHUNK_SIZE`, `READ_BUF_SIZE`
 - [x] Custom binary wire protocol (`protocol.hpp/.cpp`)
 - [x] `Buffer` — move-only, unified heap/mmap/io_uring backing via `std::function` release callback
-- [x] Whole-file push/pull over TCP
+- [x] `ChunkManager` — `vector<bool>` bitmap, bounds-checked, parallel-ready interface
+- [x] `hash.hpp/.cpp` — SHA256 via OpenSSL EVP, `EvpCtx` RAII wrapper
+- [x] 16MB chunking — `CHUNK_HDR` + raw bytes via data plane, `pread`/`pwrite` offset-safe
+- [x] `ftruncate` pre-allocation — `pwrite` at arbitrary offsets, parallel-ready
+- [x] `file_hash` removed — per-chunk SHA256 provides full integrity coverage
+- [x] Whole-file + chunked push/pull over TCP
 - [x] CLI: `embr push <file>` / `embr pull <ip>`
-- [x] Protocol unit tests
+- [x] Protocol unit tests — `HandshakePayload`, `ChunkReq`, `ChunkHdr` round-trips
 - [x] End-to-end validated: 3.2GB ISO to remote VPS, SHA256 matched
 
 ## License
 
 [Mozilla Public License 2.0](https://www.mozilla.org/en-US/MPL/2.0/) — Modify embr's files → your changes must be open source. Use embr in your own project → your new files can be any license.
+```
