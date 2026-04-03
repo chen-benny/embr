@@ -17,53 +17,55 @@
 #include "../util/constants.hpp"
 #include "../util/socket_fd.hpp"
 
-void run_push(Transport& transport, const std::string& filepath) {
-    // open file
-    int raw_fd = ::open(filepath.c_str(), O_RDONLY);
-    if (raw_fd < 0) {
-        throw std::runtime_error("run_push: failed to open " + filepath +
-                                 " - " + std::strerror(errno));
+FileMeta precompute_meta(const std::string& filepath) {
+    if (!std::filesystem::exists(filepath)) {
+        throw std::runtime_error("precompute_meta: file does not exist: " + filepath);
     }
-    SocketFd fd(raw_fd);
-
     uint64_t file_size = std::filesystem::file_size(filepath);
     if (file_size == 0) {
-        throw std::runtime_error("run_push: file is empty: " + filepath);
+        throw std::runtime_error("precompute_meta: file is empty: " + filepath);
     }
-
     std::string file_name = std::filesystem::path(filepath).filename().string();
-    auto chunk_count = static_cast<uint32_t>(
+    uint32_t chunk_count = static_cast<uint32_t>(
         (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
-    // pre-hash: mmap entire file, sha256 per chunk
-    std::cout << "[push] hashing " << file_name
-              << " (" << chunk_count << " chunks)...\n";
-
-    void* file_map = ::mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd.get(), 0);
-
-    if (file_map == MAP_FAILED) {
-        throw std::runtime_error(
-            std::string("run_push: mmap failed: ") + std::strerror(errno));
-    }
-
     FileMeta file_meta{
-        .file_name = file_name,
+        .file_name = std::move(file_name),
         .file_size = file_size,
         .chunk_size = static_cast<uint32_t>(CHUNK_SIZE),
         .chunk_count = chunk_count,
     };
+
+    std::cout << "[push] hashing " << file_name << " (" << chunk_count << " chunks)...\n";
     file_meta.chunk_hashes.resize(chunk_count);
+
+    SocketFd fd{::open(filepath.c_str(), O_RDONLY)};
+    if (fd.get() < 0) {
+        throw std::runtime_error("precompute_meta: open failed: " +
+                                 std::string(std::strerror(errno)));
+    }
+
+    void* mapped = ::mmap(nullptr, file_size, PROT_READ, MAP_SHARED, fd.get(), 0);
+    if (mapped == MAP_FAILED) {
+        throw std::runtime_error("precompute_meta: mmap failed: " +
+                                 std::string(std::strerror(errno)));
+    }
 
     for (uint32_t i = 0; i < chunk_count; ++i) {
         uint64_t offset = static_cast<uint64_t>(i) * CHUNK_SIZE;
-        uint64_t remain = file_size - offset;
-        size_t chunk_len = static_cast<size_t>(
-            std::min(static_cast<uint64_t>(CHUNK_SIZE), remain));
-        file_meta.chunk_hashes[i] = sha256_buf(static_cast<uint8_t*>(file_map) + offset, chunk_len);
+        size_t chunk_len = std::min(static_cast<uint64_t>(CHUNK_SIZE), file_size - offset);
+        file_meta.chunk_hashes[i] = sha256_buf(static_cast<uint8_t*>(mapped) + offset, chunk_len);
         std::cout << "[push] hashing " << i + 1 << "/" << chunk_count << "\r" << std::flush;
     }
-    ::munmap(file_map, file_size);
+    ::munmap(mapped, file_size);
     std::cout << "\n[push] hashing complete\n";
+    return file_meta;
+}
+
+void run_push(Transport& transport, SocketFd fd, FileMeta file_meta) {
+    const std::string file_name = file_meta.file_name; // cheap copy, keep file_name in FILE_META
+    const uint64_t file_size = file_meta.file_size;
+    const uint32_t chunk_count = file_meta.chunk_count;
 
     // recv handshake
     Message hs = recv_msg(transport);
@@ -71,7 +73,6 @@ void run_push(Transport& transport, const std::string& filepath) {
         throw std::runtime_error("run_push: expected HANDSHAKE");
     }
     auto handshake = parse_handshake(hs);
-
     std::cout << "[push] peer connected, token='" // v0.2: token is empty
               << handshake.token <<"'\n";
 

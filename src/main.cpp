@@ -1,10 +1,15 @@
 #include <iostream>
 #include <string>
 #include <cstdint>
+#include <fcntl.h>
+#include <cerrno>
+#include <cstring>
+#include "core/protocol.hpp"
 #include "core/pull.hpp"
 #include "core/push.hpp"
 #include "transport/tcp_server.hpp"
 #include "transport/tcp_client.hpp"
+#include "util/socket_fd.hpp"
 
 static constexpr uint16_t DEFAULT_PORT = 9000;
 
@@ -41,12 +46,18 @@ int main(int argc, char* argv[]) {
 
     try {
         if (cmd == "push") {
-            // transport setup to TCP
+            // gen filemeta immediately
+            FileMeta file_meta = precompute_meta(arg);
+            SocketFd file_fd{::open(arg.c_str(), O_RDONLY)};
+            if (file_fd.get() < 0) {
+                throw std::runtime_error("failed to open file: " +
+                                         arg + " - " + std::strerror(errno));
+            }
             SocketFd listen_fd = tcp_listen(port);
             std::cout << "[main] listening on port " << port << "\n";
             auto conn = tcp_accept(listen_fd.get());
             std::cout << "[main] connection established\n";
-            run_push(*conn, arg);
+            run_push(*conn, std::move(file_fd), std::move(file_meta));
         } else if (cmd == "pull") {
             // transport set to TCP
             auto conn = tcp_connect(arg, port);
