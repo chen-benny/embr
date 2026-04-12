@@ -49,6 +49,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(test
         tests/test_protocol.cpp
         tests/test_tcp.cpp
+        tests/test_udp.cpp
 )
 target_link_libraries(test PRIVATE core GTest::gtest_main)
 find_package(Threads REQUIRED)
