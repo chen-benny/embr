@@ -4,19 +4,21 @@
 
 #include "pull.hpp"
 
-#include "protocol.hpp"
-#include "chunk_manager.hpp"
-#include "hash.hpp"
+#include "transport/udp_transport.hpp"
 #include "util/socket_fd.hpp"
 
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
-#include <iostream>
-#include <stdexcept>
 #include <algorithm>
 #include <cstring>
+#include <iostream>
+#include <stdexcept>
+
+#include "chunk_manager.hpp"
+#include "hash.hpp"
+#include "protocol.hpp"
 
 void run_pull(Transport& tcp, Transport& udp, const std::string& output_path) {
     // send HANDSHAKE
@@ -46,10 +48,6 @@ void run_pull(Transport& tcp, Transport& udp, const std::string& output_path) {
         throw std::runtime_error("run_pull: failed to truncate file - " +
                                  std::string(std::strerror(errno)));
     }
-
-    // signal push: recv_file SQEs about to be submitted
-    uint8_t data_ready = 1;
-    send_exact(tcp, &data_ready, 1);
 
     // recv entire file - transport handles chunking
     // TCP path: mmap(MAP_SHARED) + recv_exact, 1 copy

@@ -157,9 +157,10 @@ static bool process_fragment(size_t frag_buf_idx,
 }
 
 // UdpTransport
-UdpTransport::UdpTransport(SocketFd fd)
+UdpTransport::UdpTransport(SocketFd fd, Transport& tcp)
     : fd_(std::move(fd))
     , ring_(UDP_CHUNK_BUFS, CHUNK_SIZE, UDP_FRAG_BUFS, UDP_MTU)
+    , tcp_(tcp)
 {}
 
 // Control plane (un-used)
@@ -324,6 +325,10 @@ void UdpTransport::send_chunk(size_t buf_idx, uint32_t chunk_index, size_t len) 
 
 // send_file: handles entire file
 void UdpTransport::send_file(int file_fd, uint64_t offset, size_t len) {
+    // cold start: wait for recv side to submit RECV SQEs
+    uint8_t ready{};
+    recv_exact(tcp_, &ready, 1);
+
     uint32_t chunk_count = static_cast<uint32_t>((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
     // cold start: read chunk 0 into buf 0
@@ -346,8 +351,23 @@ void UdpTransport::send_file(int file_fd, uint64_t offset, size_t len) {
         }
         send_chunk(buf_idx, chunk_idx, chunk_len);
 
+        // recv per-chunk ACK via TCP
+        uint8_t ack[sizeof(uint32_t)];
+        recv_exact(tcp_, ack, sizeof(ack));
+        uint32_t acked_chunk_be{};
+        std::memcpy(&acked_chunk_be, ack, sizeof(acked_chunk_be));
+        uint32_t acked_chunk = ntohl(acked_chunk_be);
+        if (acked_chunk != chunk_idx) {
+            throw std::runtime_error("send_file: ACK mismatch - expected " +
+                                     std::to_string(chunk_idx) + " got " +
+                                     std::to_string(acked_chunk));
+        }
+
         if (chunk_idx + 1 < chunk_count) {
             wait_read();
+        }
+        if (chunk_idx + 1 == chunk_count) {
+            std::cout << "\n";
         }
     }
 }
@@ -365,22 +385,21 @@ void UdpTransport::submit_recv(size_t frag_buf_idx) {
                        ring_.frag_buf(frag_buf_idx),
                        ring_.frag_buf_size(),
                        0);
-    sqe->buf_index = static_cast<uint16_t>(ring_.ring_index_frag(frag_buf_idx));
-    sqe->ioprio |= IORING_RECVSEND_FIXED_BUF;
     io_uring_sqe_set_data64(sqe, make_user_data(SqeTag::RECV, frag_buf_idx));
     // no submit here, callers batches
 }
 
 // recv_file: handle entire file
 void UdpTransport::recv_file(int file_fd, uint64_t offset, size_t len) {
-    uint32_t chunk_count = static_cast<uint32_t>((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
-
-    // pre-fill frag pool once for entire file transfer
-    // RECV SQE lifetime spans all chunks, no per-chunk cancel/resubmit
+    // cold start: submit RECV SQEs then signal sender
     for (size_t i = 0; i < ring_.frag_buf_count(); ++i) {
         submit_recv(i);
     }
     io_uring_submit(ring_.ring());
+    uint8_t ready = 1;
+    send_exact(tcp_, &ready, 1);
+
+    uint32_t chunk_count = static_cast<uint32_t>((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
     size_t pending_recvs = ring_.frag_buf_count();
 
     for (uint32_t chunk_idx = 0; chunk_idx < chunk_count; ++chunk_idx) {
@@ -410,6 +429,7 @@ void UdpTransport::recv_file(int file_fd, uint64_t offset, size_t len) {
             size_t buf_idx = get_index(ud);
             int32_t res = cqe->res;
             io_uring_cqe_seen(ring_.ring(), cqe);
+
             if (tag == SqeTag::RECV) {
                 --pending_recvs;
                 if (res <= 0) {
@@ -438,16 +458,20 @@ void UdpTransport::recv_file(int file_fd, uint64_t offset, size_t len) {
                                              std::string(std::strerror(-res)));
                 }
                 --pending_writes;
-                // WRITE complete, buf safe to reclaim next frag
-                if (state.frag_remaining > 0) {
-                    submit_recv(buf_idx);
-                    ++pending_recvs;
-                    if (pending_recvs >= flush_threshold) {
-                        io_uring_submit(ring_.ring());
-                    }
+                // WRITE complete, buffer safe to reclaim next frag
+                submit_recv(buf_idx);
+                ++pending_recvs;
+                if (pending_recvs >= flush_threshold) {
+                    io_uring_submit(ring_.ring());
                 }
             }
         }
+
+        // send per-chunk ACK via TCP
+        uint32_t chunk_index_be = htonl(chunk_idx);
+        uint8_t ack[sizeof(uint32_t)];
+        std::memcpy(ack, &chunk_index_be, sizeof(chunk_index_be));
+        send_exact(tcp_, ack, sizeof(ack));
     }
     // outstanding RECV SQEs cleaned up by IoUringCtx::~IoUringCtx -> io_uring_queue_exit
 }

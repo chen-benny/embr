@@ -10,4 +10,5 @@
 #include <cstdint>
 
 // Connect UDP socket to host:port, sends 1-byte probe
-std::unique_ptr<Transport> udp_data_client_connect(const std::string& host, uint16_t port);
+std::unique_ptr<Transport> udp_data_client_connect(const std::string& host,
+                                                   uint16_t port, Transport& tcp);

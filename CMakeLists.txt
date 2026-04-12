@@ -7,19 +7,22 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 find_package(OpenSSL REQUIRED)
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(URING REQUIRED liburing)
+
 # Transport lib
 add_library(transport
         src/transport/tcp_server.cpp
         src/transport/tcp_client.cpp
         src/transport/tcp_transport.cpp
         src/transport/udp_transport.cpp
-        src/transport/udp_transport.hpp
-        src/transport/udp_connect.cpp
-        src/transport/udp_connect.hpp
-        src/transport/udp_bind.cpp
-        src/transport/udp_bind.hpp
+        src/transport/udp_data_client.cpp
+        src/transport/udp_data_server.cpp
+        src/util/io_uring_ctx.cpp
 )
 target_include_directories(transport PUBLIC src)
+target_include_directories(transport PUBLIC ${URING_INCLUDE_DIRS})
+target_link_libraries(transport PUBLIC ${URING_LIBRARIES})
 
 # Core lib
 add_library(core
@@ -27,8 +30,6 @@ add_library(core
         src/core/push.cpp
         src/core/pull.cpp
         src/core/hash.cpp
-        src/util/io_uring_ctx.cpp
-        src/util/io_uring_ctx.hpp
 )
 target_link_libraries(core PUBLIC transport OpenSSL::Crypto)
 target_include_directories(core PUBLIC src)

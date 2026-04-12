@@ -46,7 +46,7 @@ TEST(Protocol, FileMetaRoundTrip) {
     FileMeta original{
         .file_name     = "testfile.iso",
         .file_size    = 3ULL * 1024 * 1024 * 1024,
-        .chunk_size   = 16 * 1024 * 1024,
+        .chunk_size   = static_cast<uint32_t>(CHUNK_SIZE),
         .chunk_count  = kChunkCount,
         .chunk_hashes = {hash0, hash1, hash2},
     };

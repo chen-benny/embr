@@ -19,7 +19,8 @@
 #include "udp_data_client.hpp"
 #include "udp_transport.hpp"
 
-std::unique_ptr<Transport> udp_data_client_connect(const std::string& host, uint16_t port) {
+std::unique_ptr<Transport> udp_data_client_connect(const std::string& host,
+                                                   uint16_t port, Transport& tcp) {
     int raw_fd = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (raw_fd < 0) {
         throw std::runtime_error("udp_data_client_connect: socket() failed: " +
@@ -48,5 +49,5 @@ std::unique_ptr<Transport> udp_data_client_connect(const std::string& host, uint
                                  std::string(std::strerror(errno)));
     }
 
-    return std::unique_ptr<Transport>(new UdpTransport(std::move(fd)));
+    return std::unique_ptr<Transport>(new UdpTransport(std::move(fd), tcp));
 }

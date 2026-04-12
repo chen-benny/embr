@@ -34,12 +34,13 @@ public:
     // send_file: read entire file via READ_FIXED, fragments into UDP datagrams
     // double buffer pipeline: read chunk N+1 overlaps send chunk N
     void send_file(int file_fd, uint64_t offset, size_t len) override;
+
     // recv_file: receives fragments via RECV, writes directly to disk
     // WRITE_FIXED with exact file offset, no reassembly
     void recv_file(int file_fd, uint64_t offset, size_t len) override;
 
 private:
-    explicit UdpTransport(SocketFd fd);
+    explicit UdpTransport(SocketFd fd, Transport& tcp);
 
     // send_file internals
     // Submit a READ_FIXED SQE (DMA in background)
@@ -57,12 +58,15 @@ private:
 
     SocketFd fd_; // connected UDP socket
     IoUringCtx ring_; // value member, owns io_uring ring + regi-bufs, lifetime == UdpTransport
+    Transport& tcp_; // TCP control channel: cold start sync + per-chunk ACK
 
     // READ CQE stack - send_chunk drain loop may reap TAG_READ CQE before wait_read()
     // single slot for v0.4 - one READ in flight at a time
     bool read_completed_{false};
     int32_t read_result_{0};
 
-    friend std::unique_ptr<Transport> udp_data_client_connect(const std::string& host, uint16_t port);
-    friend std::unique_ptr<Transport> udp_data_server_connect(SocketFd fd);
+    friend std::unique_ptr<Transport> udp_data_client_connect(const std::string& host,
+                                                              uint16_t port,
+                                                              Transport& tcp);
+    friend std::unique_ptr<Transport> udp_data_server_connect(SocketFd fd, Transport& tcp);
 };

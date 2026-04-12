@@ -43,7 +43,7 @@ SocketFd udp_data_server_bind(uint16_t port) {
     return fd;
 }
 
-std::unique_ptr<Transport> udp_data_server_connect(SocketFd fd) {
+std::unique_ptr<Transport> udp_data_server_connect(SocketFd fd, Transport& tcp) {
     // block until probe arrives, learn peer addr, connect and lock
     uint8_t probe{};
     sockaddr_in peer{};
@@ -61,5 +61,5 @@ std::unique_ptr<Transport> udp_data_server_connect(SocketFd fd) {
                                  std::string(std::strerror(errno)));
     }
 
-    return std::unique_ptr<Transport>(new UdpTransport(std::move(fd)));
+    return std::unique_ptr<Transport>(new UdpTransport(std::move(fd), tcp));
 }

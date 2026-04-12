@@ -84,10 +84,6 @@ void run_push(Transport& tcp, Transport& udp, SocketFd fd, FileMeta file_meta) {
               << " size=" << file_size
               << " chunks=" << chunk_count << "\n";
 
-    // wait for pull to signal recv_file SQEs submitted
-    uint8_t data_ready{};
-    recv_exact(tcp, &data_ready, 1);
-
     // stream entire file - transport handles chunking
     // TCP path: sendfile() loop, 0 copy
     // UDP path: READ_FIXED + fragment + sendmsg, double-buffer pipline, 0 copy
