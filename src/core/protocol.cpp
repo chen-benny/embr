@@ -5,73 +5,72 @@
 #include "protocol.hpp"
 #include <arpa/inet.h>
 
-// Internal scope
 namespace {
 
-    void put_u32(Buffer& buf, size_t& pos, uint32_t val) {
-        uint32_t net = htonl(val);
-        std::memcpy(buf.get() + pos, &net, sizeof(net));
-        pos += sizeof(net);
+void put_u32(Buffer& buf, size_t& pos, uint32_t val) {
+    uint32_t net = htonl(val);
+    std::memcpy(buf.get() + pos, &net, sizeof(net));
+    pos += sizeof(net);
+}
+
+void put_u64(Buffer& buf, size_t& pos, uint64_t val) {
+    // big-endian: high word first (MSB first)
+    put_u32(buf, pos, static_cast<uint32_t>(val >> 32));
+    put_u32(buf, pos, static_cast<uint32_t>(val));
+}
+
+void put_str(Buffer& buf, size_t& pos, const std::string& str) {
+    put_u32(buf, pos, static_cast<uint32_t>(str.size())); // length prefix
+    std::memcpy(buf.get() + pos, str.data(), str.size()); // raw UTF-8, no null terminator
+    pos += str.size();
+}
+
+void put_bytes(Buffer& buf, size_t& pos, const uint8_t* data, size_t len) {
+    std::memcpy(buf.get() + pos, data, len);
+    pos += len;
+}
+
+struct Reader {
+    const uint8_t* data;
+    size_t pos;
+    size_t len;
+
+    // Bound checks before read, throws if truncated/malformed payload
+    void ensure(size_t n) const {
+        if (pos + n > len) { throw std::runtime_error("protocol: truncated payload"); }
     }
 
-    void put_u64(Buffer& buf, size_t& pos, uint64_t val) {
-        // big-endian: high word first (MSB first)
-        put_u32(buf, pos, static_cast<uint32_t>(val >> 32));
-        put_u32(buf, pos, static_cast<uint32_t>(val));
+    uint32_t get_u32() {
+        ensure(sizeof(uint32_t)); // de-serialization primitive
+        uint32_t net{};
+        std::memcpy(&net, data + pos, sizeof(uint32_t));
+        pos += sizeof(uint32_t);
+        return ntohl(net);
     }
 
-    void put_str(Buffer& buf, size_t& pos, const std::string& str) {
-        put_u32(buf, pos, static_cast<uint32_t>(str.size())); // length prefix
-        std::memcpy(buf.get() + pos, str.data(), str.size()); // raw UTF-8, no null terminator
-        pos += str.size();
+    uint64_t get_u64() {
+        uint64_t hi = get_u32();
+        uint64_t lo = get_u32();
+        return (hi << 32) | lo;
     }
 
-    void put_bytes(Buffer& buf, size_t& pos, const uint8_t* data, size_t len) {
-        std::memcpy(buf.get() + pos, data, len);
-        pos += len;
+    std::string get_str() {
+        uint32_t str_len = get_u32();
+        ensure(str_len);
+        std::string str(reinterpret_cast<const char*>(data + pos), str_len);
+        pos += str_len;
+        return str;
     }
 
-    struct Reader {
-        const uint8_t* data;
-        size_t pos;
-        size_t len;
-
-        // Bound checks before read, throws if truncated/malformed payload
-        void ensure(size_t n) const {
-            if (pos + n > len) { throw std::runtime_error("protocol: truncated payload"); }
-        }
-
-        uint32_t get_u32() {
-            ensure(sizeof(uint32_t)); // de-serialization primitive
-            uint32_t net{};
-            std::memcpy(&net, data + pos, sizeof(uint32_t));
-            pos += sizeof(uint32_t);
-            return ntohl(net);
-        }
-
-        uint64_t get_u64() {
-            uint64_t hi = get_u32();
-            uint64_t lo = get_u32();
-            return (hi << 32) | lo;
-        }
-
-        std::string get_str() {
-            uint32_t str_len = get_u32();
-            ensure(str_len);
-            std::string str(reinterpret_cast<const char*>(data + pos), str_len);
-            pos += str_len;
-            return str;
-        }
-
-        template<size_t N>
-        std::array<uint8_t, N> get_bytes() {
-            ensure(N);
-            std::array<uint8_t, N> out{};
-            std::memcpy(out.data(), data + pos, N);
-            pos += N;
-            return out;
-        }
-    };
+    template<size_t N>
+    std::array<uint8_t, N> get_bytes() {
+        ensure(N);
+        std::array<uint8_t, N> out{};
+        std::memcpy(out.data(), data + pos, N);
+        pos += N;
+        return out;
+    }
+};
 
 }
 
@@ -132,7 +131,7 @@ Message make_filemeta(FileMeta file_meta) {
     //              [chunk_hashes[0]:32B]...[chunk_hashes[N-1]:32B]
     size_t payload_size = FILE_SIZE_BYTES + LEN_PREFIX_BYTES + file_meta.file_name.size()
                         + sizeof(uint32_t) + sizeof(uint32_t)
-                        + file_meta.chunk_count * 32;
+                        + file_meta.chunk_count * HASH_SIZE;
     Buffer buf(payload_size);
     size_t pos = 0;
     put_u64(buf, pos, file_meta.file_size);
@@ -172,7 +171,7 @@ Message make_chunk_req(ChunkReq req) {
 }
 
 Message make_chunk_hdr(ChunkHdr chunk_hdr) {
-    // header only: chunk_index + chunk_hash
+    // header only: chunk_index
     size_t payload_size = sizeof(uint32_t);
     Buffer buf(payload_size);
     size_t pos = 0;
@@ -189,10 +188,10 @@ FileMeta parse_filemeta(const Message& msg) {
     file_meta.chunk_size = reader.get_u32();
     file_meta.chunk_count = reader.get_u32();
     // bounds check before allocation - guard malicious or corrupt chunk_count e.g. 0XFFFFFFFF
-    reader.ensure(static_cast<size_t>(file_meta.chunk_count) * 32);
+    reader.ensure(static_cast<size_t>(file_meta.chunk_count) * HASH_SIZE);
     file_meta.chunk_hashes.resize(file_meta.chunk_count);
     for (auto& hash : file_meta.chunk_hashes) {
-        hash = reader.get_bytes<32>();
+        hash = reader.get_bytes<HASH_SIZE>();
     }
     return file_meta;
 }

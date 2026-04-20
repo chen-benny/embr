@@ -4,6 +4,10 @@
 
 #pragma once
 
+#include "hash.hpp"
+#include "transport/transport.hpp"
+#include "util/constants.hpp"
+#include "util/io.hpp"
 #include <cstring>
 #include <cerrno>
 #include <functional>
@@ -16,13 +20,8 @@
 #include <cstdint>
 #include <cstddef>
 #include <vector>
-#include "hash.hpp"
-#include "../transport/transport.hpp"
-#include "../util/constants.hpp"
-#include "../util/io.hpp"
 
-
-inline constexpr uint8_t PROTOCOL_VERSION = 0x02; // v0,3: chunk_hashes in FILE_META, ChunkHdr drop hash
+inline constexpr uint8_t PROTOCOL_VERSION = 0x02; // v0.3: chunk_hashes in FILE_META, ChunkHdr drop hash
 inline constexpr size_t HEADER_SIZE = 6; // version(1) + type(1) + payload_len(4)
 inline constexpr size_t FILE_SIZE_BYTES = sizeof(uint64_t); // 8 - [file_size:u64 BE]
 inline constexpr size_t LEN_PREFIX_BYTES = sizeof(uint32_t); // 4 - [filename_len:u32 BE]
@@ -32,9 +31,9 @@ enum class MsgType : uint8_t {
     INVALID = 0x00, // sentinel for zero-value init
     HANDSHAKE = 0x01, // v0.2: HANDSHAKE introduced for tracker + token resolution
     FILE_META = 0x02, // v0.1: connections start directly with FILE_META
-    CHUNK_REQ = 0x03,
+    CHUNK_REQ = 0x03, // v0.5: used in request-driven chunk communication
     CHUNK_HDR = 0x04,
-    RESUME = 0x05,
+    RESERVED = 0x05, // was RESUME, eliminated by request-driven design in v0.5
     COMPLETE = 0x06,
     ERROR = 0x07, // Error: sender emits reason string, both sides close connection
     CANCEL = 0x08, // CANCEL: receiver requests abort, sender stops and closes
@@ -134,11 +133,11 @@ struct FileMeta {
     uint64_t file_size{}; // bytes, big-endian on wire
     uint32_t chunk_size{};
     uint32_t chunk_count{};
-    std::vector<std::array<uint8_t, 32>> chunk_hashes{}; // pre-computed, one per chunk
+    std::vector<std::array<uint8_t, HASH_SIZE>> chunk_hashes{}; // pre-computed, one per chunk
 };
 
 struct HandshakePayload {
-    std::string token; // v0.2: empty, v0.3: real token
+    std::string token; // v0.2: empty, v0.6: real token
 };
 
 struct ChunkReq {
