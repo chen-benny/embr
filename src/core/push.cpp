@@ -8,15 +8,16 @@
 #include "hash.hpp"
 #include "util/constants.hpp"
 #include "util/socket_fd.hpp"
-#include "util/io.hpp"
+#include "transport/transport.hpp"
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
 #include <cstring>
-#include <sys/mman.h>
+#include <string>
 
 FileMeta precompute_meta(const std::string& filepath) {
     if (!std::filesystem::exists(filepath)) {
@@ -30,15 +31,15 @@ FileMeta precompute_meta(const std::string& filepath) {
     uint32_t chunk_count = static_cast<uint32_t>(
         (file_size + CHUNK_SIZE - 1) / CHUNK_SIZE);
 
-    FileMeta meta{
+    FileMeta file_meta{
         .file_name = std::move(file_name),
         .file_size = file_size,
         .chunk_size = static_cast<uint32_t>(CHUNK_SIZE),
         .chunk_count = chunk_count,
     };
 
-    std::cout << "[push] hashing " << meta.file_name << " (" << chunk_count << " chunks)...\n";
-    meta.chunk_hashes.resize(chunk_count);
+    std::cout << "[push] hashing " << file_meta.file_name << " (" << chunk_count << " chunks)...\n";
+    file_meta.chunk_hashes.resize(chunk_count);
 
     SocketFd fd{::open(filepath.c_str(), O_RDONLY)};
     if (fd.get() < 0) {
@@ -56,44 +57,57 @@ FileMeta precompute_meta(const std::string& filepath) {
         uint64_t offset = static_cast<uint64_t>(i) * CHUNK_SIZE;
         size_t chunk_len = static_cast<size_t>(
             std::min(static_cast<uint64_t>(CHUNK_SIZE), file_size - offset));
-        meta.chunk_hashes[i] = sha256_buf(static_cast<uint8_t*>(mapped) + offset, chunk_len);
+        file_meta.chunk_hashes[i] = sha256_buf(static_cast<uint8_t*>(mapped) + offset, chunk_len);
         std::cout << "[push] hashing " << i + 1 << "/" << chunk_count << "\r" << std::flush;
     }
     ::munmap(mapped, file_size);
     std::cout << "\n[push] hashing complete\n";
-    return meta;
+    return file_meta;
 }
 
-void run_push(Transport& tcp, Transport& udp, SocketFd fd, FileMeta file_meta) {
+void run_push(Transport& t, SocketFd fd, FileMeta file_meta) {
     const std::string file_name = file_meta.file_name; // cheap copy, keep file_name in FILE_META
     const uint64_t file_size = file_meta.file_size;
     const uint32_t chunk_count = file_meta.chunk_count;
 
-    // recv handshake
-    Message hs = recv_msg(tcp);
-    if (hs.type != MsgType::HANDSHAKE) {
+    // recv HANDSHAKE
+    Message hs_msg = recv_msg(t);
+    if (hs_msg.type != MsgType::HANDSHAKE) {
         throw std::runtime_error("run_push: expected HANDSHAKE");
     }
-    auto handshake = parse_handshake(hs);
+    auto handshake = parse_handshake(hs_msg);
     std::cout << "[push] peer connected, token='" // v0.2: token is empty
               << handshake.token <<"'\n";
 
     // send FILE_META
-    send_msg(tcp, make_filemeta(std::move(file_meta)));
+    send_msg(t, make_filemeta(std::move(file_meta)));
     std::cout << "[push] sent FILE_META - file=" << file_name
               << " size=" << file_size
               << " chunks=" << chunk_count << "\n";
 
-    // stream entire file - transport handles chunking
-    // TCP path: sendfile() loop, 0 copy
-    // UDP path: READ_FIXED + fragment + sendmsg, double-buffer pipline, 0 copy
-    udp.send_file(fd.get(), 0, file_size);
-    std::cout << "[push] file sent\n";
+    // request-driven send loop: recv CHUNK_REQ, send CHUNK_HDR + data; break on COMPLETE
+    uint32_t chunks_sent = 0;
+    while (true) {
+        Message msg = recv_msg(t);
+        if (msg.type == MsgType::COMPLETE) { break; }
+        if (msg.type != MsgType::CHUNK_REQ) {
+            throw std::runtime_error("run_push: unexpected message type: " +
+                                     std::to_string(static_cast<uint8_t>(msg.type)));
+        }
 
-    // recv COMPLETE
-    Message done = recv_msg(tcp);
-    if (done.type != MsgType::COMPLETE) {
-        throw std::runtime_error("run_push: expected COMPLETE");
+        ChunkReq chunk_req = parse_chunk_req(msg);
+        if (chunk_req.chunk_index >= chunk_count) {
+            throw std::runtime_error("run_push: chunk_index out of range: " +
+                                     std::to_string(chunk_req.chunk_index));
+        }
+
+        uint64_t offset = static_cast<uint64_t>(chunk_req.chunk_index) * CHUNK_SIZE;
+        uint64_t chunk_len = std::min(static_cast<uint64_t>(CHUNK_SIZE), file_size - offset);
+        send_msg(t, make_chunk_hdr(ChunkHdr{chunk_req.chunk_index}));
+        t.send_file(fd.get(), offset, chunk_len);
+        ++chunks_sent;
+        std::cout << "[push] sent chunk " << chunk_req.chunk_index
+                  << " (" << chunks_sent << " total)\r" << std::flush;
     }
-    std::cout << "[push] transfer complete\n";
+    std::cout << "\n[push] transfer complete - sent " << chunks_sent << " chunks\n";
 }
