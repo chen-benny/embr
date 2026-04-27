@@ -65,7 +65,7 @@ void run_tracker_server(const tracker_config& config) {
 
     std::cout << "[tracker] listening on "
               << config.bind_addr << ":" << config.bind_port
-              << "( TTL=" << config.ttl.count() << "min)\n";
+              << "(TTL=" << config.ttl.count() << "min)\n";
 
     if (!server.listen(config.bind_addr, config.bind_port)) {
         std::cerr << "[tracker] failed to bind "
