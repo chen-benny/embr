@@ -63,7 +63,7 @@ int run_push_cli(int argc, char* argv[]) {
     }
 
     const std::string file_path = argv[1];
-    uint16_t port = 10007;
+    uint16_t port = EMBR_PORT;
     std::string tracker_url;
     std::string sender_ip;
 

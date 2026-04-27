@@ -4,6 +4,7 @@
 
 #include "tracker_cli.hpp"
 #include "tracker/tracker_server.hpp"
+#include "util/constants.hpp"
 #include <chrono>
 #include <cstdint>
 #include <iostream>
@@ -24,7 +25,7 @@ void print_tracker_usage() {
 int run_tracker_cli(int argc, char* argv[]) {
     tracker_config config{
         .bind_addr = "0.0.0.0",
-        .bind_port = 10009,
+        .bind_port = TRACKER_PORT,
         .ttl = std::chrono::minutes(10),
     };
 

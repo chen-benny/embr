@@ -4,6 +4,11 @@
 
 #pragma once
 #include <cstddef>
+#include <cstdint>
+
+// PORT
+inline constexpr uint16_t EMBR_PORT = 10007;
+inline constexpr uint16_t TRACKER_PORT = 10009;
 
 // Hash
 inline constexpr size_t HASH_SIZE = 32;

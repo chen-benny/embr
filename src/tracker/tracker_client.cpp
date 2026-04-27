@@ -4,6 +4,7 @@
 
 #include "tracker_client.hpp"
 #include "util/json_parser.hpp"
+#include "util/constants.hpp"
 #include <httplib.h>
 #include <cstdint>
 #include <stdexcept>
@@ -17,7 +18,8 @@ struct ParsedUrl {
     int tracker_port;
 };
 
-// Parse "http://host:port" -> {tracker_host, tracker_port}, throw on malformed URL
+// Parse "http://host:port" -> {tracker_host, tracker_port}
+//       "host" -> {tracker_host, default_port=10009}
 ParsedUrl parse_url(const std::string& tracker_url) {
     const std::string prefix = "http://"; // no support TLS yet
     size_t start = 0;
@@ -26,7 +28,7 @@ ParsedUrl parse_url(const std::string& tracker_url) {
     }
     const size_t colon_pos = tracker_url.rfind(':');
     if (colon_pos == std::string::npos || colon_pos < start) {
-        throw std::runtime_error("tracker_client: malformed tracker URL: " + tracker_url);
+        return { tracker_url.substr(start), TRACKER_PORT };
     }
     return {
         tracker_url.substr(start, colon_pos - start),

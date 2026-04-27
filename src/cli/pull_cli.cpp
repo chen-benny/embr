@@ -56,7 +56,7 @@ int run_pull_cli(int argc, char* argv[]) {
     }
 
     const std::string arg = argv[1];
-    uint16_t port = 10007;
+    uint16_t port = EMBR_PORT;
     std::string tracker_url;
     std::string out_path;
 
