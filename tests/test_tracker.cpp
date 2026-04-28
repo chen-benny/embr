@@ -54,8 +54,8 @@ struct TrackerHandle {
     }
 };
 
-const std::string TRACKER_URL = "http://127.0.0.1:19009";
-const uint16_t    TRACKER_PORT = 19009;  // test-only port, avoids conflict with 10009
+const std::string TEST_TRACKER_URL = "http://127.0.0.1:19009";
+const uint16_t    TEST_TRACKER_PORT = 19009;  // test-only port, avoids conflict with 10009
 const std::string VALID_TOKEN  = "3a7b4e2f1c9d8a6b";  // 16 lowercase hex chars
 const std::string SHORT_TOKEN  = "3a7b4e2f";           // 8 chars — invalid
 const std::string BAD_TOKEN    = "3a7b4e2f1c9dXXXX";  // non-hex chars — invalid
@@ -157,37 +157,37 @@ TEST(TrackerHandlers, ValidToken_RejectsEmpty) {
 // ── Integration tests — full HTTP round-trip ──────────────────────────────────
 
 TEST(TrackerIntegration, RegisterAndResolve) {
-    TrackerHandle tracker(TRACKER_PORT);
+    TrackerHandle tracker(TEST_TRACKER_PORT);
 
-    tracker_register(TRACKER_URL, VALID_TOKEN, 4747);
+    tracker_register(TEST_TRACKER_URL, VALID_TOKEN, 4747);
 
-    auto [sender_ip, sender_port] = tracker_resolve(TRACKER_URL, VALID_TOKEN);
+    auto [sender_ip, sender_port] = tracker_resolve(TEST_TRACKER_URL, VALID_TOKEN);
     EXPECT_FALSE(sender_ip.empty());
     EXPECT_EQ(sender_port, 4747u);
 
-    tracker_unregister(TRACKER_URL, VALID_TOKEN);
+    tracker_unregister(TEST_TRACKER_URL, VALID_TOKEN);
 }
 
 TEST(TrackerIntegration, ResolveUnknownTokenThrows) {
-    TrackerHandle tracker(TRACKER_PORT);
-    EXPECT_THROW(tracker_resolve(TRACKER_URL, "0000000000000000"),
+    TrackerHandle tracker(TEST_TRACKER_PORT);
+    EXPECT_THROW(tracker_resolve(TEST_TRACKER_URL, "0000000000000000"),
                  std::runtime_error);
 }
 
 TEST(TrackerIntegration, UnregisterIsIdempotent) {
-    TrackerHandle tracker(TRACKER_PORT);
-    tracker_register(TRACKER_URL, VALID_TOKEN, 4747);
-    tracker_unregister(TRACKER_URL, VALID_TOKEN);
-    tracker_unregister(TRACKER_URL, VALID_TOKEN);  // second call — must not throw
+    TrackerHandle tracker(TEST_TRACKER_PORT);
+    tracker_register(TEST_TRACKER_URL, VALID_TOKEN, 4747);
+    tracker_unregister(TEST_TRACKER_URL, VALID_TOKEN);
+    tracker_unregister(TEST_TRACKER_URL, VALID_TOKEN);  // second call — must not throw
 }
 
 TEST(TrackerIntegration, UpsertUpdatesRecord) {
-    TrackerHandle tracker(TRACKER_PORT);
-    tracker_register(TRACKER_URL, VALID_TOKEN, 4747);
-    tracker_register(TRACKER_URL, VALID_TOKEN, 9000);  // re-register same token
+    TrackerHandle tracker(TEST_TRACKER_PORT);
+    tracker_register(TEST_TRACKER_URL, VALID_TOKEN, 4747);
+    tracker_register(TEST_TRACKER_URL, VALID_TOKEN, 9000);  // re-register same token
 
-    auto [sender_ip, sender_port] = tracker_resolve(TRACKER_URL, VALID_TOKEN);
+    auto [sender_ip, sender_port] = tracker_resolve(TEST_TRACKER_URL, VALID_TOKEN);
     EXPECT_EQ(sender_port, 9000u);  // last-writer-wins
 
-    tracker_unregister(TRACKER_URL, VALID_TOKEN);
+    tracker_unregister(TEST_TRACKER_URL, VALID_TOKEN);
 }
