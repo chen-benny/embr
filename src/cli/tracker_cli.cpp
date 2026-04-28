@@ -23,7 +23,7 @@ void print_tracker_usage() {
 }
 
 int run_tracker_cli(int argc, char* argv[]) {
-    tracker_config config{
+    TrackerConfig config{
         .bind_addr = "0.0.0.0",
         .bind_port = TRACKER_PORT,
         .ttl = std::chrono::minutes(10),

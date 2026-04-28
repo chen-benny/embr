@@ -2,16 +2,15 @@
 // Created by benny on 4/26/26.
 //
 
+#include "token_store.hpp"
+#include "tracker_handlers.hpp"
+#include "tracker_server.hpp"
 #include <atomic>
 #include <chrono>
 #include <csignal>
 #include <iostream>
 #include <string>
 #include <thread>
-
-#include "token_store.hpp"
-#include "tracker_handlers.hpp"
-#include "tracker_server.hpp"
 #include <httplib.h>
 
 namespace {
@@ -20,12 +19,13 @@ namespace {
 httplib::Server* g_server = nullptr;
 
 void signal_handler(int) {
+    std::cout <<"\n[tracker] signal received, stopping...\n";
     if (g_server) { g_server->stop(); }
 }
 
 }
 
-void run_tracker_server(const tracker_config& config) {
+void run_tracker_server(const TrackerConfig& config) {
     TokenStore store(config.ttl);
     httplib::Server server;
     g_server = &server;
@@ -36,7 +36,9 @@ void run_tracker_server(const tracker_config& config) {
     // background sweeper: evict expired token every 60s
     std::jthread sweeper([&store](std::stop_token stop_token) {
         while (!stop_token.stop_requested()) {
-            std::this_thread::sleep_for(std::chrono::seconds(60));
+            for (int i = 0; i < 60 && !stop_token.stop_requested(); ++i) { // cond var for signal
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            }
             if (stop_token.stop_requested()) { break; }
             const size_t evicted = store.sweep_expired();
             if (evicted > 0) {
@@ -65,7 +67,7 @@ void run_tracker_server(const tracker_config& config) {
 
     std::cout << "[tracker] listening on "
               << config.bind_addr << ":" << config.bind_port
-              << "(TTL=" << config.ttl.count() << "min)\n";
+              << " (TTL=" << config.ttl.count() << "min)\n";
 
     if (!server.listen(config.bind_addr, config.bind_port)) {
         std::cerr << "[tracker] failed to bind "
