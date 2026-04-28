@@ -1,8 +1,10 @@
+#include <iostream>
+#include <string>
+
 #include "cli/pull_cli.hpp"
 #include "cli/push_cli.hpp"
 #include "cli/tracker_cli.hpp"
-#include <iostream>
-#include <string>
+#include "cli/trust_cli.hpp"
 
 namespace {
 
@@ -26,6 +28,7 @@ int main(int argc, char* argv[]) {
     if (verb == "push") { return run_push_cli(argc - 1, argv + 1); }
     if (verb == "pull") { return run_pull_cli(argc - 1, argv + 1); }
     if (verb == "tracker") { return run_tracker_cli(argc - 1, argv + 1); }
+    if (verb == "trust") { return run_trust_cli(argc - 1, argv + 1); }
 
     std::cerr << "Unknown command: " << verb << "\n";
     print_usage();
